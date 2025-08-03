@@ -1,0 +1,16 @@
+# Simple PDF Scraper Dependencies
+
+# PDF processing
+pypdf>=3.0.0
+
+# For future processor backends (optional)
+# pdfplumber>=0.9.0
+# PyMuPDF>=1.20.0
+
+# Standard library modules used:
+# - csv (built-in)
+# - re (built-in) 
+# - pathlib (built-in)
+# - tempfile (built-in)
+# - argparse (built-in)
+# - abc (built-in)
