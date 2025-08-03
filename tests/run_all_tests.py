@@ -6,10 +6,15 @@ a combined score and summary.
 """
 
 import sys
+
 from pathlib import Path
 
-# Add parent directory to path so we can import test modules
-sys.path.insert(0, str(Path(__file__).parent))
+# Add both current directory (for test modules) and parent directory (for package) to path
+current_dir = Path(__file__).parent
+parent_dir = current_dir.parent
+
+sys.path.insert(0, str(current_dir))  # For importing test modules
+sys.path.insert(0, str(parent_dir))   # For importing simple_pdf_scraper package
 
 import test_processors
 import test_extractors

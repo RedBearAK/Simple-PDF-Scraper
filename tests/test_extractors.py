@@ -5,6 +5,12 @@ Tests should be runnable with pytest but not in pytest style.
 Accumulate results and show final score.
 """
 
+import sys
+from pathlib import Path
+
+# Add parent directory to Python path to find the package
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from simple_pdf_scraper.extractors.pattern_extractor import PatternExtractor
 
 

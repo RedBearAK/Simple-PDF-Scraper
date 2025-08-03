@@ -3,7 +3,6 @@ Pattern-based text extraction with directional search capabilities.
 """
 
 import re
-from typing import Union
 
 
 class PatternExtractor:
@@ -67,24 +66,39 @@ class PatternExtractor:
             # Case-insensitive search for keyword
             start_pos = line.lower().find(keyword.lower())
             if start_pos != -1:
-                # Find word boundaries around the keyword
+                # Find the end position of the keyword
+                end_pos = start_pos + len(keyword)
+                
+                # Find which words the keyword spans
                 words = line.split()
                 char_pos = 0
+                keyword_start_word = None
+                keyword_end_word = None
                 
                 for word_idx, word in enumerate(words):
                     word_start = char_pos
                     word_end = char_pos + len(word)
                     
-                    if word_start <= start_pos < word_end or keyword.lower() in word.lower():
-                        return {
-                            'line': line_idx,
-                            'word_index': word_idx,
-                            'char_start': word_start,
-                            'char_end': word_end,
-                            'line_text': line
-                        }
+                    # Check if keyword starts in this word
+                    if keyword_start_word is None and start_pos >= word_start and start_pos < word_end + 1:
+                        keyword_start_word = word_idx
+                    
+                    # Check if keyword ends in this word  
+                    if end_pos <= word_end + 1:  # +1 for space after word
+                        keyword_end_word = word_idx
+                        break
                     
                     char_pos = word_end + 1  # +1 for space
+                
+                if keyword_start_word is not None and keyword_end_word is not None:
+                    return {
+                        'line': line_idx,
+                        'word_index': keyword_start_word,  # Where keyword starts
+                        'char_start': start_pos,
+                        'char_end': end_pos,
+                        'line_text': line,
+                        'keyword_end_word': keyword_end_word  # Where keyword ends
+                    }
         
         return None
     
@@ -111,7 +125,9 @@ class PatternExtractor:
         
         elif direction == 'right':
             words_in_line = len(lines[current_line].split())
-            target_word = current_word + distance + 1  # +1 to skip the keyword itself
+            # Use keyword_end_word if available (for multi-word keywords)
+            keyword_end = keyword_pos.get('keyword_end_word', current_word)
+            target_word = keyword_end + distance + 1  # +1 to move past the keyword
             if target_word >= words_in_line:
                 return None
             return {

@@ -5,9 +5,15 @@ Tests should be runnable with pytest but not in pytest style.
 Accumulate results and show final score.
 """
 
-import tempfile
-import os
+import sys
+
 from pathlib import Path
+
+# Add parent directory to Python path to find the package
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import os
+import tempfile
 
 from simple_pdf_scraper.cli import parse_pattern, parse_patterns_file, expand_file_paths
 from simple_pdf_scraper.output.tsv_writer import TSVWriter
