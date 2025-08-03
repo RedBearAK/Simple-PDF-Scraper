@@ -6,6 +6,7 @@ Accumulate results and show final score.
 """
 
 import sys
+
 from pathlib import Path
 
 # Add parent directory to Python path to find the package
