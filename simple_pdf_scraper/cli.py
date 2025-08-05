@@ -15,7 +15,7 @@ from simple_pdf_scraper.processors.pypdf_processor import PyPDFProcessor
 from simple_pdf_scraper.extractors.pattern_extractor import PatternExtractor
 
 
-def parse_pattern(pattern_str):
+def parse_pattern(pattern_str: str):
     """
     Parse pattern string in format: keyword:direction:distance:extract_type
     
@@ -64,7 +64,7 @@ def parse_patterns_file(file_path):
     return patterns
 
 
-def expand_file_paths(file_patterns):
+def expand_file_paths(file_patterns: list[str]):
     """Expand file patterns and return list of actual PDF files."""
     pdf_files = []
     for pattern in file_patterns:
