@@ -1,12 +1,13 @@
 """
 Command line interface for Simple PDF Scraper.
-
 File: simple_pdf_scraper/cli.py
 """
 
+import os
 import sys
 import glob
 import argparse
+import warnings
 
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from simple_pdf_scraper.processors.pypdf_processor import PyPDFProcessor
 from simple_pdf_scraper.extractors.pattern_extractor import PatternExtractor
 
 
-def parse_pattern(pattern_str: str):
+def parse_pattern(pattern_str):
     """
     Parse pattern string in format: keyword:direction:distance:extract_type
     
@@ -64,7 +65,147 @@ def parse_patterns_file(file_path):
     return patterns
 
 
-def expand_file_paths(file_patterns: list[str]):
+def suppress_pypdf_warnings():
+    """Suppress pypdf warnings about malformed PDFs."""
+    # Suppress specific pypdf warnings
+    warnings.filterwarnings("ignore", message=".*wrong pointing object.*")
+    warnings.filterwarnings("ignore", message=".*Ignoring wrong pointing object.*")
+    
+    # Redirect stderr temporarily to capture and filter pypdf messages
+    class FilteredStderr:
+        def __init__(self, original_stderr):
+            self.original = original_stderr
+            
+        def write(self, message):
+            # Filter out pypdf error messages
+            if not ("wrong pointing object" in message or 
+                   "Ignoring wrong pointing object" in message):
+                self.original.write(message)
+                
+        def flush(self):
+            self.original.flush()
+            
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+    
+    return FilteredStderr(sys.stderr)
+
+
+def dump_text_from_pdf(pdf_file, processor, verbose=False, output_file=None):
+    """Extract and dump raw text from a PDF file."""
+    try:
+        if verbose:
+            print(f"Extracting text from: {pdf_file}")
+        
+        pages = processor.extract_pages(pdf_file)
+        
+        # Determine output destination
+        if output_file:
+            output = open(output_file, 'w', encoding='utf-8')
+            if verbose:
+                print(f"Writing text to: {output_file}")
+        else:
+            output = sys.stdout
+        
+        try:
+            print(f"\n{'='*60}", file=output)
+            print(f"TEXT DUMP: {pdf_file}", file=output)
+            print(f"{'='*60}", file=output)
+            print(f"Total pages: {len(pages)}", file=output)
+            print(f"Extracted: {sum(1 for p in pages if p.strip())}/{len(pages)} pages with text\n", file=output)
+            
+            for page_num, page_text in enumerate(pages, 1):
+                print(f"--- PAGE {page_num} ---", file=output)
+                if page_text.strip():
+                    print(page_text, file=output)
+                    # Show line count for this page
+                    line_count = len([line for line in page_text.split('\n') if line.strip()])
+                    if verbose:
+                        print(f"(Page {page_num}: {line_count} lines)", file=output)
+                else:
+                    print("(No text found on this page)", file=output)
+                print(file=output)
+            
+            # Show summary
+            total_lines = sum(len([line for line in page.split('\n') if line.strip()]) for page in pages)
+            print(f"--- SUMMARY ---", file=output)
+            print(f"Total text lines across all pages: {total_lines}", file=output)
+            
+        finally:
+            if output_file:
+                output.close()
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
+        return False
+
+
+def create_argument_parser():
+    """Create and configure the argument parser."""
+    parser = argparse.ArgumentParser(
+        description="Extract targeted text data from PDF files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Dump raw text to console (debugging)
+  python -m simple_pdf_scraper --dump-text document.pdf
+  
+  # Dump text to file
+  python -m simple_pdf_scraper --dump-text document.pdf -o extracted_text.txt
+  
+  # Extract invoice number (word immediately right of "Invoice #")
+  python -m simple_pdf_scraper invoice.pdf --pattern "Invoice #:right:0:word"
+  
+  # Extract company name (line above "Invoice #") 
+  python -m simple_pdf_scraper invoice.pdf --pattern "Invoice #:above:1:line"
+  
+  # Multiple patterns from file
+  python -m simple_pdf_scraper *.pdf --patterns-file patterns.txt -o results.tsv
+
+Pattern format: keyword:direction:distance:extract_type
+  keyword:       Text to search for (case-insensitive)
+  direction:     left, right, above, below
+  distance:      Number of words/lines to move from keyword
+  extract_type:  word, number, line, text
+
+Note: Text maintains line structure internally, so 'above' and 'below'
+work even though TSV output flattens results into cells.
+        """
+    )
+    
+    parser.add_argument('files', nargs='+', help='PDF file(s) to process (supports wildcards)')
+    
+    # Mode selection
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument('--dump-text', action='store_true',
+                           help='Extract and display raw text from PDFs (debugging mode)')
+    mode_group.add_argument('--pattern', action='append', 
+                           help='Single pattern (can be used multiple times)')
+    mode_group.add_argument('--patterns-file', 
+                           help='File containing patterns, one per line')
+    
+    # Output options
+    parser.add_argument('--output', '-o', 
+                       help='Output file name (default: extracted_data.tsv for patterns, stdout for --dump-text)')
+    parser.add_argument('--headers', nargs='+',
+                       help='Custom column headers (default: auto-generated from patterns)')
+    
+    # Processing options
+    parser.add_argument('--processor', default='pypdf', choices=['pypdf'],
+                       help='PDF processing backend (default: pypdf)')
+    parser.add_argument('--quiet', '-q', action='store_true',
+                       help='Suppress pypdf warnings about malformed PDFs')
+    
+    # Verbosity
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Show detailed processing information')
+    
+    return parser
+
+
+def expand_file_paths(file_patterns):
     """Expand file patterns and return list of actual PDF files."""
     pdf_files = []
     for pattern in file_patterns:
@@ -80,81 +221,51 @@ def expand_file_paths(file_patterns: list[str]):
     return sorted(set(pdf_files))  # Remove duplicates and sort
 
 
-def create_argument_parser():
-    """Create and configure the argument parser."""
-    parser = argparse.ArgumentParser(
-        prog="simple-pdf-scraper",
-        description="Extract targeted text data from PDF files",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Dump all text from PDF (default with no patterns)
-  python -m simple_pdf_scraper invoice.pdf
-  
-  # Batch text dump to single TSV file
-  python -m simple_pdf_scraper *.pdf --dump-text --output all_content.tsv
-  
-  # Batch text dump to separate TSV files (invoice1.pdf → invoice1.tsv)
-  python -m simple_pdf_scraper *.pdf --dump-text --split-output
-  
-  # Single file with inline pattern
-  python -m simple_pdf_scraper invoice.pdf --pattern "Invoice Number:right:2:number" --headers "Invoice"
-  
-  # Batch pattern extraction to single file
-  python -m simple_pdf_scraper *.pdf --patterns-file patterns.txt --output results.tsv
-  
-  # Batch pattern extraction to separate files  
-  python -m simple_pdf_scraper *.pdf --patterns-file patterns.txt --split-output
-
-Pattern format: keyword:direction:distance:extract_type
-  keyword:       Text to search for
-  direction:     left, right, above, below
-  distance:      Number of words/lines to move
-  extract_type:  word, number, line, text
-        """
-    )
-    
-    parser.add_argument('files', nargs='+', help='PDF file(s) to process (supports wildcards)')
-    
-    # Pattern specification
-    pattern_group = parser.add_mutually_exclusive_group(required=False)
-    pattern_group.add_argument('--pattern', action='append', 
-                              help='Single pattern (can be used multiple times)')
-    pattern_group.add_argument('--patterns-file', 
-                              help='File containing patterns, one per line')
-    pattern_group.add_argument('--dump-text', action='store_true',
-                              help='Extract and output all text content (default if no patterns given)')
-    
-    # Output options
-    parser.add_argument('--output', '-o', default='extracted_data.tsv',
-                       help='Output file name (default: extracted_data.tsv, ignored with --split-output)')
-    parser.add_argument('--split-output', action='store_true',
-                       help='Create separate TSV files for each PDF (invoice.pdf → invoice.tsv)')
-    parser.add_argument('--headers', nargs='+',
-                       help='Custom column headers (default: auto-generated from patterns)')
-    
-    # Processing options
-    parser.add_argument('--processor', default='pypdf', choices=['pypdf'],
-                       help='PDF processing backend (default: pypdf)')
-    
-    # Verbosity
-    parser.add_argument('--verbose', '-v', action='store_true',
-                       help='Show detailed processing information')
-    
-    return parser
-
-
 def main():
     """Main entry point for the CLI."""
     parser = create_argument_parser()
     args = parser.parse_args()
     
-    # Determine mode: text dump or pattern extraction
-    text_dump_mode = args.dump_text or (not args.pattern and not args.patterns_file)
+    # Set up error filtering for pypdf
+    original_stderr = sys.stderr
+    if args.quiet or args.dump_text:
+        sys.stderr = suppress_pypdf_warnings()
     
-    patterns = []
-    if not text_dump_mode:
-        # Parse patterns for extraction mode
+    try:
+        # Expand file paths
+        pdf_files = expand_file_paths(args.files)
+        if not pdf_files:
+            print("Error: No PDF files found", file=sys.stderr)
+            return 1
+        
+        # Initialize processor
+        if args.processor == 'pypdf':
+            processor = PyPDFProcessor()
+        else:
+            print(f"Error: Unknown processor: {args.processor}", file=sys.stderr)
+            return 1
+        
+        # Handle dump-text mode
+        if args.dump_text:
+            if args.verbose:
+                print(f"Found {len(pdf_files)} PDF files to dump")
+            
+            success_count = 0
+            for pdf_file in pdf_files:
+                if dump_text_from_pdf(pdf_file, processor, args.verbose, args.output):
+                    success_count += 1
+            
+            if args.verbose:
+                print(f"\nProcessed {success_count}/{len(pdf_files)} files successfully")
+            
+            return 0 if success_count > 0 else 1
+        
+        # Handle pattern extraction mode
+        if not (args.pattern or args.patterns_file):
+            print("Error: Must specify --pattern or --patterns-file when not using --dump-text", file=sys.stderr)
+            return 1
+        
+        # Parse patterns
         if args.pattern:
             try:
                 patterns = [parse_pattern(p) for p in args.pattern]
@@ -169,89 +280,14 @@ def main():
         if not patterns:
             print("Error: No valid patterns specified", file=sys.stderr)
             return 1
-    
-    # Expand file paths
-    pdf_files = expand_file_paths(args.files)
-    if not pdf_files:
-        print("Error: No PDF files found", file=sys.stderr)
-        return 1
-    
-    if args.verbose:
-        print(f"Found {len(pdf_files)} PDF files to process")
-        if text_dump_mode:
-            print("Mode: Text dump")
-        else:
-            print(f"Mode: Pattern extraction with {len(patterns)} patterns")
-    
-    # Initialize components
-    if args.processor == 'pypdf':
-        processor = PyPDFProcessor()
-    else:
-        print(f"Error: Unknown processor: {args.processor}", file=sys.stderr)
-        return 1
-    
-    if text_dump_mode:
-        # Text dump mode: extract all text
-        headers = ['filename', 'page', 'text_content']
         
-        if args.split_output:
-            # Create separate TSV files for each PDF
-            writer = TSVWriter()
-            processed_files = 0
-            
-            for pdf_file in pdf_files:
-                if args.verbose:
-                    print(f"Processing: {pdf_file}")
-                
-                try:
-                    pages = processor.extract_pages(pdf_file)
-                    pdf_results = []
-                    
-                    for page_num, page_text in enumerate(pages, 1):
-                        pdf_results.append([pdf_file, page_num, page_text])
-                    
-                    if pdf_results:
-                        # Create output filename based on PDF name
-                        pdf_path = Path(pdf_file)
-                        output_file = pdf_path.with_suffix('.tsv').name
-                        writer.write_results(output_file, headers, pdf_results)
-                        
-                        if args.verbose:
-                            print(f"  Wrote {len(pdf_results)} pages to {output_file}")
-                        
-                        processed_files += 1
-                        
-                except Exception as e:
-                    print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
-                    continue
-            
-            if processed_files > 0:
-                if args.verbose:
-                    print(f"Successfully processed {processed_files}/{len(pdf_files)} files")
-                return 0
-            else:
-                print("No files could be processed", file=sys.stderr)
-                return 1
+        # Set default output file for pattern mode
+        output_file = args.output or 'extracted_data.tsv'
         
-        else:
-            # Single TSV file mode
-            all_results = []
-            
-            for pdf_file in pdf_files:
-                if args.verbose:
-                    print(f"Processing: {pdf_file}")
-                
-                try:
-                    pages = processor.extract_pages(pdf_file)
-                    for page_num, page_text in enumerate(pages, 1):
-                        all_results.append([pdf_file, page_num, page_text])
-                        
-                except Exception as e:
-                    print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
-                    continue
-    
-    else:
-        # Pattern extraction mode
+        if args.verbose:
+            print(f"Found {len(pdf_files)} PDF files to process")
+            print(f"Using {len(patterns)} extraction patterns")
+        
         extractor = PatternExtractor()
         
         # Set up column headers
@@ -263,98 +299,52 @@ def main():
         else:
             headers = ['filename', 'page'] + [p['keyword'] for p in patterns]
         
-        if args.split_output:
-            # Create separate TSV files for each PDF
-            writer = TSVWriter()
-            processed_files = 0
-            
-            for pdf_file in pdf_files:
-                if args.verbose:
-                    print(f"Processing: {pdf_file}")
-                
-                try:
-                    pages = processor.extract_pages(pdf_file)
-                    pdf_results = []
-                    
-                    for page_num, page_text in enumerate(pages, 1):
-                        row = [pdf_file, page_num]
-                        
-                        for pattern in patterns:
-                            result = extractor.extract_pattern(page_text, pattern)
-                            row.append(result if result is not None else '')
-                        
-                        # Only add row if at least one pattern matched
-                        if any(cell != '' for cell in row[2:]):
-                            pdf_results.append(row)
-                    
-                    if pdf_results:
-                        # Create output filename based on PDF name
-                        pdf_path = Path(pdf_file)
-                        output_file = pdf_path.with_suffix('.tsv').name
-                        writer.write_results(output_file, headers, pdf_results)
-                        
-                        if args.verbose:
-                            print(f"  Wrote {len(pdf_results)} matching rows to {output_file}")
-                        
-                        processed_files += 1
-                    
-                except Exception as e:
-                    print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
-                    continue
-            
-            if processed_files > 0:
-                if args.verbose:
-                    print(f"Successfully processed {processed_files}/{len(pdf_files)} files")
-                return 0
-            else:
-                print("No matching patterns found in any files", file=sys.stderr)
-                return 1
+        # Process files
+        all_results = []
+        total_files = len(pdf_files)
+        processed_files = 0
         
-        else:
-            # Single TSV file mode for pattern extraction
-            all_results = []
+        for pdf_file in pdf_files:
+            if args.verbose:
+                print(f"Processing: {pdf_file}")
             
-            for pdf_file in pdf_files:
-                if args.verbose:
-                    print(f"Processing: {pdf_file}")
-                
-                try:
-                    pages = processor.extract_pages(pdf_file)
-                    for page_num, page_text in enumerate(pages, 1):
-                        row = [pdf_file, page_num]
-                        
-                        for pattern in patterns:
-                            result = extractor.extract_pattern(page_text, pattern)
-                            row.append(result if result is not None else '')
-                        
-                        # Only add row if at least one pattern matched
-                        if any(cell != '' for cell in row[2:]):
-                            all_results.append(row)
+            try:
+                pages = processor.extract_pages(pdf_file)
+                for page_num, page_text in enumerate(pages, 1):
+                    row = [pdf_file, page_num]
                     
-                except Exception as e:
-                    print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
-                    continue
-    
-    # Write results for single TSV file modes
-    if not args.split_output:
+                    for pattern in patterns:
+                        result = extractor.extract_pattern(page_text, pattern)
+                        row.append(result if result is not None else '')
+                    
+                    # Only add row if at least one pattern matched
+                    if any(cell != '' for cell in row[2:]):
+                        all_results.append(row)
+                
+                processed_files += 1
+                
+            except Exception as e:
+                print(f"Error processing {pdf_file}: {e}", file=sys.stderr)
+                continue
+        
+        # Write results
         if all_results:
             writer = TSVWriter()
-            writer.write_results(args.output, headers, all_results)
+            writer.write_results(output_file, headers, all_results)
             
             if args.verbose:
-                if text_dump_mode:
-                    print(f"Text dump completed: {len(all_results)} pages extracted")
-                else:
-                    print(f"Pattern extraction completed: {len(all_results)} matching rows")
-                print(f"Results written to: {args.output}")
+                print(f"Successfully processed {processed_files}/{total_files} files")
+                print(f"Extracted {len(all_results)} rows of data")
+                print(f"Results written to: {output_file}")
         else:
-            if text_dump_mode:
-                print("No text could be extracted from any files", file=sys.stderr)
-            else:
-                print("No data extracted from any files", file=sys.stderr)
+            print("No data extracted from any files", file=sys.stderr)
             return 1
-    
-    return 0
+        
+        return 0
+        
+    finally:
+        # Restore original stderr
+        sys.stderr = original_stderr
 
 
 if __name__ == "__main__":
