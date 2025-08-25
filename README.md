@@ -6,7 +6,8 @@ A focused tool for extracting specific patterns of text from machine-generated P
 
 - **Targeted extraction**: Find text relative to keywords using directional rules
 - **Flexible patterns**: Extract words, numbers, lines, or remaining text
-- **Pluggable processors**: Easily swap PDF processing backends
+- **Multiple processors**: Choose between pypdf (fast) and pdfplumber (advanced spacing)
+- **Advanced spacing control**: Center-distance filtering to handle spurious spaces
 - **Batch processing**: Handle multiple PDF files at once
 - **TSV output**: Tab-separated format for reliable spreadsheet import
 - **CLI-driven**: All configuration via command line arguments
@@ -31,6 +32,24 @@ pip install -r requirements.txt
 Extract a single pattern from one PDF:
 ```bash
 python -m simple_pdf_scraper invoice.pdf --pattern "Invoice Number:right:2:number" --headers "Invoice"
+```
+
+### Tuning for Different Documents
+
+Adjust adaptive thresholds for different document types:
+```bash
+# More conservative (fewer changes)
+python -m simple_pdf_scraper invoice.pdf --min-space-ratio 1.5 --add-space-ratio 2.8 --pattern "Total:right:0:text"
+
+# More aggressive (more spacing fixes)
+python -m simple_pdf_scraper invoice.pdf --min-space-ratio 1.0 --add-space-ratio 3.5 --pattern "Invoice #:right:1:word"
+```
+
+### Fast Processing for Simple PDFs
+
+For well-formatted PDFs without spacing issues, use pypdf for speed:
+```bash
+python -m simple_pdf_scraper invoice.pdf --processor pypdf --pattern "Total:right:0:text"
 ```
 
 ### Batch Processing
@@ -76,6 +95,33 @@ Date:below:0:word
 Description:right:0:text
 ```
 
+## PDF Processing Options
+
+### pdfplumber Processor (Default)
+- **Font-size-aware** with adaptive thresholds
+- **Character-level positioning** analysis
+- **Center-distance filtering** to remove spurious spaces and add missing ones
+- Excellent for **problematic PDFs** with spacing issues
+- Automatically adapts to different font sizes
+- Slightly slower but much more accurate
+
+### pypdf Processor (Fast Alternative)  
+- **Fast** and lightweight
+- **Smart spacing patterns** to fix common concatenation issues
+- Good for **simple, well-formatted PDFs** without major spacing problems
+- Uses regex patterns to detect and fix issues like missing spaces between words/numbers
+
+```bash
+# Default: Use pdfplumber (recommended)
+python -m simple_pdf_scraper invoice.pdf --pattern "Invoice:right:1:word"
+
+# Fast alternative for simple PDFs
+python -m simple_pdf_scraper invoice.pdf --processor pypdf --pattern "Total:right:0:text"
+
+# Tune adaptive thresholds
+python -m simple_pdf_scraper invoice.pdf --min-space-ratio 1.5 --add-space-ratio 2.8
+```
+
 ### Command Line Options
 
 ```
@@ -87,7 +133,12 @@ options:
   --patterns-file FILE  File containing patterns, one per line
   --output, -o FILE     Output file name (default: extracted_data.tsv)
   --headers HEADERS     Custom column headers
-  --processor PROC      PDF processing backend (default: pypdf)
+  --processor PROC      PDF processing backend (pdfplumber or pypdf)
+  --min-space-ratio     Character spacing ratio to keep spaces (pdfplumber adaptive)
+  --add-space-ratio     Character spacing ratio to add missing spaces (pdfplumber adaptive)
+  --min-space-distance  Fixed minimum center-distance (pdfplumber legacy mode)
+  --add-space-distance  Fixed distance threshold (pdfplumber legacy mode)
+  --smart-spacing       Enable smart spacing patterns (pypdf)
   --verbose, -v         Show detailed processing information
 ```
 
@@ -95,7 +146,9 @@ options:
 
 The tool is designed with pluggable components:
 
-- **Processors**: Different PDF text extraction backends (`pypdf`, future: `pdfplumber`, `PyMuPDF`)
+- **Processors**: Different PDF text extraction backends:
+  - `pypdf`: Fast extraction with smart spacing patterns for common concatenation issues
+  - `pdfplumber`: Slower but more precise, uses character-level positioning and center-distance filtering to handle spurious spaces and missing spaces
 - **Extractors**: Pattern-based text extraction with directional rules
 - **Output**: TSV formatting with data cleaning
 
@@ -106,6 +159,15 @@ Run all tests:
 python tests/run_all_tests.py
 ```
 
+Test specific features:
+```bash
+# Test center-distance filtering
+python tests/test_center_distance_filtering.py your_pdf.pdf
+
+# Compare processors
+python tests/test_processor_comparison.py your_pdf.pdf
+```
+
 Or run individual test modules:
 ```bash
 python tests/test_processors.py
@@ -113,15 +175,11 @@ python tests/test_extractors.py
 python tests/test_integration.py
 ```
 
-Tests can also be run with pytest:
-```bash
-pytest tests/
-```
-
 ## Requirements
 
 - Python 3.8+
-- pypdf
+- pdfplumber (primary processor, included in requirements.txt)
+- pypdf (fast alternative, included in requirements.txt)
 
 ## Project Structure
 
@@ -134,7 +192,9 @@ Simple-PDF-Scraper/
 │   ├── processors/              # PDF processing backends
 │   │   ├── __init__.py
 │   │   ├── base.py             # Abstract processor
-│   │   └── pypdf_processor.py  # pypdf implementation
+│   │   ├── pypdf_processor.py  # pypdf implementation
+│   │   ├── pdfplumber_processor.py  # pdfplumber with center-distance filtering
+│   │   └── pdfplumber_patterns.py  # Regex patterns for pdfplumber
 │   ├── extractors/              # Pattern extraction
 │   │   ├── __init__.py
 │   │   └── pattern_extractor.py
@@ -145,6 +205,8 @@ Simple-PDF-Scraper/
 │   ├── test_processors.py
 │   ├── test_extractors.py
 │   ├── test_integration.py
+│   ├── test_center_distance_filtering.py
+│   ├── test_processor_comparison.py
 │   └── run_all_tests.py
 ├── requirements.txt
 └── README.md

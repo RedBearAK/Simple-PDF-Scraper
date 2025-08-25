@@ -1,6 +1,9 @@
 """
-Command line interface for Simple PDF Scraper.
+Command line interface for Simple PDF Scraper with pdfplumber support.
 File: simple_pdf_scraper/cli.py
+
+Enhanced version that supports both pypdf and pdfplumber processors
+with tunable parameters for center-distance filtering.
 """
 
 import os
@@ -145,7 +148,7 @@ def dump_text_from_pdf(pdf_file, processor, verbose=False, output_file=None):
 def create_argument_parser():
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
-        description="Extract targeted text data from PDF files",
+        description="Extract targeted text data from PDF files with advanced spacing control",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -158,8 +161,14 @@ Examples:
   # Extract invoice number (word immediately right of "Invoice #")
   python -m simple_pdf_scraper invoice.pdf --pattern "Invoice #:right:0:word"
   
-  # Extract company name (line above "Invoice #") 
-  python -m simple_pdf_scraper invoice.pdf --pattern "Invoice #:above:1:line"
+  # Use pypdf for simple, well-formatted PDFs (faster)
+  python -m simple_pdf_scraper invoice.pdf --processor pypdf --pattern "Total:right:0:text"
+  
+  # Tune adaptive font-size-aware thresholds (default pdfplumber processor)
+  python -m simple_pdf_scraper invoice.pdf --min-space-ratio 1.5 --add-space-ratio 2.8
+  
+  # Use legacy fixed thresholds (overrides adaptive mode)
+  python -m simple_pdf_scraper invoice.pdf --processor pdfplumber --min-space-distance 8.0 --add-space-distance 12.0
   
   # Multiple patterns from file
   python -m simple_pdf_scraper *.pdf --patterns-file patterns.txt -o results.tsv
@@ -169,6 +178,10 @@ Pattern format: keyword:direction:distance:extract_type
   direction:     left, right, above, below
   distance:      Number of words/lines to move from keyword
   extract_type:  word, number, line, text
+
+Processors:
+  pdfplumber: Enhanced font-aware adaptive filtering with tab insertion (default).
+  pypdf:      Fast, good for simple well-formatted PDFs. Uses smart spacing patterns.
 
 Note: Text maintains line structure internally, so 'above' and 'below'
 work even though TSV output flattens results into cells.
@@ -193,10 +206,32 @@ work even though TSV output flattens results into cells.
                        help='Custom column headers (default: auto-generated from patterns)')
     
     # Processing options
-    parser.add_argument('--processor', default='pypdf', choices=['pypdf'],
-                       help='PDF processing backend (default: pypdf)')
+    parser.add_argument('--processor', default='pdfplumber', choices=['pypdf', 'pdfplumber'],
+                       help='PDF processing backend (default: pdfplumber)')
     parser.add_argument('--quiet', '-q', action='store_true',
-                       help='Suppress pypdf warnings about malformed PDFs')
+                       help='Suppress processor warnings about malformed PDFs')
+    
+    # pypdf options
+    parser.add_argument('--smart-spacing', action='store_true', default=True,
+                       help='Enable smart spacing patterns (pypdf only, default: enabled)')
+    
+    # pdfplumber options (adaptive font-size-aware by default)
+    parser.add_argument('--min-space-ratio', type=float, default=1.3,
+                       help='Minimum ratio of character spacing to keep spaces (pdfplumber adaptive mode)')
+    parser.add_argument('--add-space-ratio', type=float, default=1.5,
+                       help='Ratio threshold to add missing spaces (pdfplumber adaptive mode)')
+    parser.add_argument('--add-tab-ratio', type=float, default=5.0,
+                       help='Ratio threshold to add tabs for structural boundaries (pdfplumber adaptive mode)')
+    parser.add_argument('--space-char', default=' ',
+                       help='Character to insert for normal gaps (default: space)')
+    parser.add_argument('--tab-char', default='\t',
+                       help='Character to insert for large gaps (default: tab)')
+    
+    # pdfplumber legacy options (fixed thresholds - overrides adaptive mode)
+    parser.add_argument('--min-space-distance', type=float,
+                       help='Fixed minimum center-distance to keep spaces (legacy mode)')
+    parser.add_argument('--add-space-distance', type=float,
+                       help='Fixed distance threshold to add missing spaces (legacy mode)')
     
     # Verbosity
     parser.add_argument('--verbose', '-v', action='store_true',
@@ -239,8 +274,23 @@ def main():
             return 1
         
         # Initialize processor
-        if args.processor == 'pypdf':
-            processor = PyPDFProcessor()
+        if args.processor == 'pdfplumber':
+            try:
+                from simple_pdf_scraper.processors.pdfplumber_processor import PDFPlumberProcessor
+                processor = PDFPlumberProcessor(
+                    min_space_ratio=args.min_space_ratio,
+                    add_space_ratio=args.add_space_ratio,
+                    add_tab_ratio=args.add_tab_ratio,
+                    space_char=args.space_char,
+                    tab_char=args.tab_char,
+                    min_space_distance=args.min_space_distance,
+                    add_space_distance=args.add_space_distance
+                )
+            except ImportError:
+                print("Warning: pdfplumber not available, falling back to pypdf", file=sys.stderr)
+                processor = PyPDFProcessor(smart_spacing=args.smart_spacing)
+        elif args.processor == 'pypdf':
+            processor = PyPDFProcessor(smart_spacing=args.smart_spacing)
         else:
             print(f"Error: Unknown processor: {args.processor}", file=sys.stderr)
             return 1
@@ -249,6 +299,7 @@ def main():
         if args.dump_text:
             if args.verbose:
                 print(f"Found {len(pdf_files)} PDF files to dump")
+                print(f"Using processor: {args.processor}")
             
             success_count = 0
             for pdf_file in pdf_files:
@@ -287,6 +338,7 @@ def main():
         if args.verbose:
             print(f"Found {len(pdf_files)} PDF files to process")
             print(f"Using {len(patterns)} extraction patterns")
+            print(f"Using processor: {args.processor}")
         
         extractor = PatternExtractor()
         

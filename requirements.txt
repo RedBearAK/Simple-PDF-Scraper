@@ -1,10 +1,12 @@
 # Simple PDF Scraper Dependencies
 
-# PDF processing
+# PDF processing - primary (font-size-aware, handles spurious spaces)
+pdfplumber>=0.9.0
+
+# PDF processing - alternative (fast, good for simple well-formatted PDFs)
 pypdf>=3.0.0
 
 # For future processor backends (optional)
-# pdfplumber>=0.9.0
 # PyMuPDF>=1.20.0
 
 # Standard library modules used:
