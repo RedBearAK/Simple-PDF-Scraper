@@ -86,9 +86,6 @@ class PDFPlumberProcessor(PDFProcessor):
         
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                if pdf.is_encrypted:
-                    raise Exception("PDF is password protected and cannot be processed")
-                
                 for page_num, page in enumerate(pdf.pages):
                     try:
                         text = self._extract_page_with_filtering(page)
@@ -98,7 +95,14 @@ class PDFPlumberProcessor(PDFProcessor):
                         print(f"Warning: Failed to extract text from page {page_num + 1}: {page_error}", file=sys.stderr)
         
         except Exception as e:
-            raise Exception(f"Error reading PDF {pdf_path}: {e}")
+            # Handle potential encryption or other PDF access issues
+            error_msg = str(e).lower()
+            if 'password' in error_msg or 'encrypted' in error_msg or 'decrypt' in error_msg:
+                raise Exception(f"PDF {pdf_path} appears to be password protected and cannot be processed")
+            elif 'damaged' in error_msg or 'corrupt' in error_msg:
+                raise Exception(f"PDF {pdf_path} appears to be corrupted")
+            else:
+                raise Exception(f"Error reading PDF {pdf_path}: {e}")
         
         return pages_text
     
@@ -110,9 +114,6 @@ class PDFPlumberProcessor(PDFProcessor):
         
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                if pdf.is_encrypted:
-                    raise Exception("PDF is password protected and cannot be processed")
-                
                 if page_number < 1 or page_number > len(pdf.pages):
                     raise IndexError(f"Page {page_number} out of range (1-{len(pdf.pages)})")
                 
@@ -122,7 +123,12 @@ class PDFPlumberProcessor(PDFProcessor):
         except (IndexError, FileNotFoundError):
             raise
         except Exception as e:
-            raise Exception(f"Error reading page {page_number} from PDF {pdf_path}: {e}")
+            # Handle potential encryption or other PDF access issues
+            error_msg = str(e).lower()
+            if 'password' in error_msg or 'encrypted' in error_msg or 'decrypt' in error_msg:
+                raise Exception(f"PDF {pdf_path} appears to be password protected and cannot be processed")
+            else:
+                raise Exception(f"Error reading page {page_number} from PDF {pdf_path}: {e}")
     
     def get_page_count(self, pdf_path):
         """Get page count using pdfplumber."""
@@ -132,13 +138,15 @@ class PDFPlumberProcessor(PDFProcessor):
         
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                if pdf.is_encrypted:
-                    raise Exception("PDF is password protected and cannot be processed")
-                
                 return len(pdf.pages)
                 
         except Exception as e:
-            raise Exception(f"Error reading PDF {pdf_path}: {e}")
+            # Handle potential encryption or other PDF access issues
+            error_msg = str(e).lower()
+            if 'password' in error_msg or 'encrypted' in error_msg or 'decrypt' in error_msg:
+                raise Exception(f"PDF {pdf_path} appears to be password protected and cannot be processed")
+            else:
+                raise Exception(f"Error reading PDF {pdf_path}: {e}")
     
     def validate_pdf(self, pdf_path):
         """
@@ -160,16 +168,8 @@ class PDFPlumberProcessor(PDFProcessor):
             with pdfplumber.open(pdf_path) as pdf:
                 info = {
                     'page_count': len(pdf.pages),
-                    'encrypted': pdf.is_encrypted,
                     'processor': 'pdfplumber'
                 }
-                
-                if pdf.is_encrypted:
-                    return {
-                        'valid': False,
-                        'error': 'PDF is password protected',
-                        'info': info
-                    }
                 
                 # Try to extract characters from first page to test readability
                 if len(pdf.pages) > 0:
@@ -182,11 +182,20 @@ class PDFPlumberProcessor(PDFProcessor):
                                 'info': info
                             }
                     except Exception as extract_error:
-                        return {
-                            'valid': False,
-                            'error': f'Cannot extract characters: {extract_error}',
-                            'info': info
-                        }
+                        # Check if this looks like an encryption error
+                        error_msg = str(extract_error).lower()
+                        if 'password' in error_msg or 'encrypted' in error_msg or 'decrypt' in error_msg:
+                            return {
+                                'valid': False,
+                                'error': 'PDF appears to be password protected',
+                                'info': info
+                            }
+                        else:
+                            return {
+                                'valid': False,
+                                'error': f'Cannot extract characters: {extract_error}',
+                                'info': info
+                            }
                 
                 return {
                     'valid': True,
@@ -195,9 +204,18 @@ class PDFPlumberProcessor(PDFProcessor):
                 }
                 
         except Exception as e:
+            # Handle potential encryption or other PDF access issues
+            error_msg = str(e).lower()
+            if 'password' in error_msg or 'encrypted' in error_msg or 'decrypt' in error_msg:
+                error = "PDF appears to be password protected"
+            elif 'damaged' in error_msg or 'corrupt' in error_msg:
+                error = "PDF appears to be corrupted"
+            else:
+                error = f'pdfplumber processing error: {e}'
+            
             return {
                 'valid': False,
-                'error': f'pdfplumber processing error: {e}',
+                'error': error,
                 'info': {}
             }
     
@@ -352,6 +370,31 @@ class PDFPlumberProcessor(PDFProcessor):
         
         return ''.join(result_chars)
     
+    def _apply_enhanced_center_distance_filtering(self, char_data, min_space_distance, add_space_distance, add_tab_distance):
+        """Apply enhanced center-distance filtering with tab insertion."""
+        result_chars = []
+        i = 0
+        
+        while i < len(char_data):
+            current_char = char_data[i]
+            
+            if current_char['is_space']:
+                # This is a space character - decide whether to keep it
+                if self._should_keep_space(char_data, i, min_space_distance):
+                    result_chars.append(self.space_char)
+            else:
+                # This is a non-space character - always add it
+                result_chars.append(current_char['text'])
+                
+                # Check what separator (if any) to add after this character
+                separator = self._get_separator_to_add(char_data, i, add_space_distance, add_tab_distance)
+                if separator:
+                    result_chars.append(separator)
+            
+            i += 1
+        
+        return ''.join(result_chars)
+    
     def _should_keep_space(self, char_data, space_index, min_space_distance):
         """Determine if a space should be kept based on adjacent character distances."""
         # Find the non-space characters before and after this space
@@ -379,6 +422,49 @@ class PDFPlumberProcessor(PDFProcessor):
         
         # Keep space if there's enough distance between the adjacent characters
         return distance >= min_space_distance
+    
+    def _should_add_space_after(self, char_data, char_index, add_space_distance):
+        """Determine if a space should be added after a character."""
+        # Don't add space after the last character
+        if char_index >= len(char_data) - 1:
+            return False
+        
+        current_char = char_data[char_index]
+        next_char = char_data[char_index + 1]
+        
+        # Don't add space if next character is already a space
+        if next_char['is_space']:
+            return False
+        
+        # Calculate center-to-center distance
+        distance = next_char['center'] - current_char['center']
+        
+        # Add space if distance is large enough
+        return distance >= add_space_distance
+    
+    def _get_separator_to_add(self, char_data, char_index, add_space_distance, add_tab_distance):
+        """Determine what separator (if any) should be added after a character."""
+        # Don't add separator after the last character
+        if char_index >= len(char_data) - 1:
+            return None
+        
+        current_char = char_data[char_index]
+        next_char = char_data[char_index + 1]
+        
+        # Don't add separator if next character is already a space
+        if next_char['is_space']:
+            return None
+        
+        # Calculate center-to-center distance
+        distance = next_char['center'] - current_char['center']
+        
+        # Determine appropriate separator based on distance
+        if distance >= add_tab_distance:
+            return self.tab_char  # Large gap = structural boundary
+        elif distance >= add_space_distance:
+            return self.space_char  # Medium gap = missing space
+        else:
+            return None  # Small gap = no separator needed
     
     def get_processor_info(self):
         """Return information about this processor."""
